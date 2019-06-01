@@ -131,21 +131,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("image_folder", help="Path to folder containing image chips (ie 'Image_Chips/' ")
     parser.add_argument("json_filepath", help="Filepath to GEOJSON coordinate file")
-    parser.add_argument("-t", "--test_percent", type=float, default=0.333,
+    parser.add_argument("label_filepath",help="Filepath to file containing class labels, each line id:label")
+    parser.add_argument('-o','--output',type=str,default='.',help='output folder')
+    parser.add_argument("-t", "--test_percent", type=float, default=0.1,
                     help="Percent to split into test (ie .25 = test set is 25% total)")
     parser.add_argument("-s", "--suffix", type=str, default='t1',
                     help="Output TFRecord suffix. Default suffix 't1' will output 'xview_train_t1.record' and 'xview_test_t1.record'")
-    parser.add_argument("-a","--augment", type=bool, default=False,
+    parser.add_argument("-a","--augment", action='store_true',
     				help="A boolean value whether or not to use augmentation")
+    parser.add_argument('-n','--max_chips',type=int,default=1000,help='max chips per res')
+    parser.add_argument('-m','--multires',action='store_true',help='use multiple resolutions')
+    parser.add_argument('-v', '--vehicles',action='store_true', help='include buidings')
+    parser.add_argument('-b','--buildings',action='store_true',help='include buidings')
     args = parser.parse_args()
-
+    print(args)
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
     #resolutions should be largest -> smallest.  We take the number of chips in the largest resolution and make
     #sure all future resolutions have less than 1.5times that number of images to prevent chip size imbalance.
-    #res = [(500,500),(400,400),(300,300),(200,200)]
-    res = [(300,300)]
+    if args.multires:
+        res = [(500,500),(400,400),(300,300),(200,200)]
+    else:
+        res = [(300,300)]
 
     AUGMENT = args.augment
     SAVE_IMAGES = False
@@ -155,26 +163,45 @@ if __name__ == "__main__":
     test_chips = 0
 
     #Parameters
-    max_chips_per_res = 100000
-    train_writer = tf.python_io.TFRecordWriter("xview_train_%s.record" % args.suffix)
-    test_writer = tf.python_io.TFRecordWriter("xview_test_%s.record" % args.suffix)
+    train_writer = tf.python_io.TFRecordWriter(args.output+"/xview_train_%s.record" % args.suffix)
+    test_writer = tf.python_io.TFRecordWriter(args.output+"/xview_test_%s.record" % args.suffix)
+
+    def isIncluded(class_id):
+        return (args.vehicles * (class_id<=66)) + (args.buildings * (class_id > 66))
 
     coords,chips,classes = wv.get_labels(args.json_filepath)
+    valid = isIncluded(classes)
+    coords,chips,classes = coords[valid],chips[valid],classes[valid]
+    # make list of ids and class names
+    with open(args.label_filepath, 'r') as f:
+        clids,names = zip(*((int(i),n) for i,n in (s.strip().split(':') for s in f) if isIncluded(int(i))))
+    # turn label map into pbtxt
+    import object_detection.protos.string_int_label_map_pb2 as proto
+    A = proto.StringIntLabelMap()
+    for clid,name in enumerate(names,1):
+        if isIncluded(id):
+            a = A.item.add()
+            a.id = id
+            a.display_name = name
+    with open(args.output+'/xview_label_map_%s.pbtxt'%args.suffix,'w') as f:
+        print(A,file=f)
+
+    import numpy as np
+    classes = np.searchsorted(clids,classes,side='right')
 
     for res_ind, it in enumerate(res):
         tot_box = 0
         logging.info("Res: %s" % str(it))
         ind_chips = 0
 
-        fnames = glob.glob(args.image_folder + "*.tif")
+        fnames = glob.glob(args.image_folder + "/*.tif")
         fnames.sort()
-
         for fname in tqdm(fnames):
             #Needs to be "X.tif", ie ("5.tif")
             #Be careful!! Depending on OS you may need to change from '/' to '\\'.  Use '/' for UNIX and '\\' for windows
             name = fname.split("/")[-1]
             arr = wv.get_image(fname)
-
+            if not len(chips==name): continue
             im,box,classes_final = wv.chip_image(arr,coords[chips==name],classes[chips==name],it)
 
             #Shuffle images & boxes all at once. Comment out the line below if you don't want to shuffle images
@@ -188,7 +215,7 @@ if __name__ == "__main__":
                 #If there are no valid bounding boxes, then don't save the image to the TFRecord.
                 float_list_value = tf_example.features.feature['image/object/bbox/xmin'].float_list.value
                 
-                if (ind_chips < max_chips_per_res and np.array(float_list_value).any()):
+                if (ind_chips < args.max_chips and np.array(float_list_value).any()):
                     tot_box+=np.array(float_list_value).shape[0]
                     
                     if idx < split_ind:
@@ -244,7 +271,7 @@ if __name__ == "__main__":
                                     aug.draw_bboxes(newimg,nb).save('process/img_nobox_%s_%s_%s.png'%(name,extra,it[0]))
         if res_ind == 0:
             max_chips_per_res = int(ind_chips * 1.5)
-            logging.info("Max chips per resolution: %s " % max_chips_per_res)
+            logging.info("Max chips per resolution: %s " % args.max_chips)
 
         logging.info("Tot Box: %d" % tot_box)
         logging.info("Chips: %d" % ind_chips)
