@@ -168,26 +168,26 @@ if __name__ == "__main__":
 
     def isIncluded(class_id):
         return (args.vehicles * (class_id<=66)) + (args.buildings * (class_id > 66))
-
+    # get annotations and filter for only desired classes
     coords,chips,classes = wv.get_labels(args.json_filepath)
-    valid = isIncluded(classes)
+    valid = isIncluded(classes) # filter
     coords,chips,classes = coords[valid],chips[valid],classes[valid]
     # make list of ids and class names
-    with open(args.label_filepath, 'r') as f:
-        clids,names = zip(*((int(i),n) for i,n in (s.strip().split(':') for s in f) if isIncluded(int(i))))
-    # turn label map into pbtxt
     import object_detection.protos.string_int_label_map_pb2 as proto
     A = proto.StringIntLabelMap()
-    for clid,name in enumerate(names,1):
-        if isIncluded(id):
-            a = A.item.add()
-            a.id = id
-            a.display_name = name
+    with open(args.label_filepath, 'r') as f:
+        for s in f:
+            s_id,name = s.strip().split(':')
+            n_id = int(s_id)
+            if isIncluded(n_id):
+                a = A.item.add()
+                a.id = n_id
+                a.display_name = name
     with open(args.output+'/xview_label_map_%s.pbtxt'%args.suffix,'w') as f:
         print(A,file=f)
-
-    import numpy as np
-    classes = np.searchsorted(clids,classes,side='right')
+    # no class reduction for compatibility with baseline
+    #import numpy as np
+    #classes = np.searchsorted(clids,classes,side='right')
 
     for res_ind, it in enumerate(res):
         tot_box = 0
